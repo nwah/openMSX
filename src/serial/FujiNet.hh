@@ -24,6 +24,8 @@ class FujiNet final
     : public MSXDevice
 {
 public:
+    static constexpr unsigned MAX_BANKS = 4;
+
 	explicit FujiNet(DeviceConfig& config);
 	~FujiNet() override;
 
@@ -48,11 +50,17 @@ private:
 	void readyUserROM();
 	void enableUserROM();
 	void disableUserROM();
+	void setUserROMType(uint8_t t);
+	void setUserROMBank(uint8_t n, uint32_t offset);
+	void handleBankSwitch(uint16_t address, uint8_t value);
 
 	Rom rom;
 	std::vector<std::uint8_t> userRom;
+	std::array<std::uint32_t, MAX_BANKS> userRomMap;
+	uint8_t userRomType; // TODO: actual enum/type
 	bool userRomEnabled;
 	bool userRomLoaded;
+	uint16_t userRomBankSize;
 	BooleanSetting debugMode;
 	std::thread thread; // receiving thread (reads from pty)
 	Poller poller; // to abort read-thread in a portable way

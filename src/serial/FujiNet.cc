@@ -34,6 +34,7 @@ FujiNet::FujiNet(DeviceConfig& config)
     stopReading = false;
     userRomEnabled = false;
     userRomLoaded = false;
+    userRomBankSize = 0x4000;
 }
 
 FujiNet::~FujiNet()
@@ -196,6 +197,78 @@ void FujiNet::disableUserROM()
     userRomEnabled = false;
 }
 
+void FujiNet::setUserROMType(uint8_t t)
+{
+    userRomType = t;
+
+    switch (userRomType) {
+        case 1: // ASCII-8; TODO: use real enum
+            userRomBankSize = 0x2000;
+            break;
+        default:
+            userRomBankSize = 0x4000;
+            break;
+    }
+
+    // Reset all 8K banks/half banks to sequential
+    for (auto n : MAX_BANKS) {
+        setUserROMBank(n, n * 0x2000);
+    }
+}
+
+void FujiNet::setUserROMBank(uint8_t n, uint32_t offset)
+{
+    userRomMap[n] = offset;
+
+    // For 16K banks, automatically set the second 8K half-bank to the correct offset
+    if (userRomBankSize == 0x4000) {
+        userRomMap[n+1] = offset + 0x2000;
+    }
+}
+
+void FujiNet::handleBankSwitch(uint16_t address, uint8_t value)
+{
+    if (address < 0x4000 || address >= 0xC000)
+        return;
+
+    uint32_t offset = value * userRomBankSize;
+
+    switch (userRomType) {
+        case 1: // ASCII-8; TODO: use real enum
+            if ((0x6000 <= address) && (address < 0x8000)) {
+                uint8_t bank = ((address >> 11) & 3) + 2;
+                setUserROMBank(bank, offset);
+            }
+            break;
+
+        case 2: // ASCII-16; TODO: use real enum
+            if ((0x6000 <= address) && (address < 0x7800) && !(address & 0x0800)) {
+          		uint8_t bank = ((address >> 12) & 1) + 1;
+                setUserROMBank(bank, offset);
+           	}
+            break;
+
+        case 3: // Konami; TODO: use real enum
+            // Note: [0x4000..0x6000) is fixed at segment 0.
+           	if (0x6000 <= address && address < 0xC000) {
+                uint8_t bank = ((address >> 12) & 1) + 1;
+          		setUserROMBank(bank, offset);
+           	}
+            break;
+
+        case 4: // Konami+SCC; TODO: use real enum
+           	if (0x5000 <= address && address < 0xC000 && (address & 0x1800) == 0x1000) {
+          		uint8_t bank = address >> 13;
+          		setUserROMBank(bank, offset);
+          		// TODO: if bank = 4 clear SCC cache
+           	}
+            break;
+
+        default:
+            break;
+    }
+}
+
 void FujiNet::reset(EmuTime /*time*/)
 {
     disableUserROM();
@@ -245,6 +318,7 @@ uint8_t FujiNet::peekMem(uint16_t address, EmuTime /*time*/) const
     if (debugMode.getBoolean()) {
         getCliComm().printInfo("FujiNet: peekMem() ", address);
     }
+
 	switch (address) {
 		case IO_GETC_ADDR: {
 			std::lock_guard lock(mtx);
@@ -265,15 +339,45 @@ uint8_t FujiNet::peekMem(uint16_t address, EmuTime /*time*/) const
 			return status;
 		}
 		default:
-			if (address < 0x4000 || 0xC000 <= address) return 0xFF;
-			return userRomEnabled ? userRom[address - 0x4000] : rom[address - 0x4000];
+			if (userRomEnabled)
+			    return peekUserROM(address);
+			if (address < 0x4000 || 0xC000 <= address)
+                return 0xFF;
+		    return rom[address - 0x4000];
+
 	}
+}
+
+uint8_t FujiNet::peekUserROM(uint16_t address)
+{
+    switch (userRomType) {
+        case 3: // Konami; TODO: use real enum
+            // [0x0000, 0x4000) mirrors [0x4000, 0x8000)
+            if (address < 0x4000) address += 0x4000;
+            // [0xC000, 0x10000) mirrors [0x8000, 0xC000)
+            else if (address >= 0xC000) address -= 0x4000;
+            break;
+
+        case 4: // Konami+SCC; TODO: use real enum
+            // [0x0000, 0x4000) mirrors [0xC000, 0x10000)
+            if (address < 0x4000) address += 0x8000;
+            // [0xC000, 0x10000) mirrors [0x4000, 0x8000)
+            else if (address >= 0xC000) address -= 0x8000;
+            break;
+
+        default:
+            break;
+    }
+
+    uint8_t bank = (address - 0x4000) / 0x2000; // TODO: validate bank
+    uint16_t offset = userRomMap[bank];
+
+    return userRom[offset + address - 0x4000];
 }
 
 void FujiNet::writeMem(uint16_t address, uint8_t value, EmuTime /*time*/)
 {
     std::lock_guard lock(mtx);
-    // getCliComm().printInfo("FujiNet: writeMem() ", address, " ", value);
     switch (address) {
         case IO_PUTC_ADDR: // IO_PUTC
             if (sock != OPENMSX_INVALID_SOCKET) {
@@ -286,31 +390,6 @@ void FujiNet::writeMem(uint16_t address, uint8_t value, EmuTime /*time*/)
                     getCliComm().printInfo("FujiNet: PUTC ", formatted);
                 }
 
-                // txBuffer.push_back(value);
-                // if (value == SLIP_END) {
-                //     if (inSLIPPacket) {
-                //         inSLIPPacket = false;
-
-                //         std::string packet = "";
-                //         for (auto c : txBuffer) {
-                //             packet.push_back(c);
-                //         }
-                //         auto tempFrame = FujiBusPacket::fromSerialized(packet);
-                //         if (tempFrame) {
-                //             char formatted[32];
-                //             sprintf(formatted, "\nCF: dev:%02x cmd:%02x dlen:%d\n",
-                //                         tempFrame->device(), tempFrame->command(),
-                //                         tempFrame->data() ? tempFrame->data()->size() : -1);
-                //             getCliComm().printInfo(formatted);
-                //         }
-
-                //         txBuffer.clear();
-                //     }
-                //     else {
-                //         inSLIPPacket = true;
-                //     }
-                // }
-
                 auto res = sock_send(sock, reinterpret_cast<const char*>(&value), 1);
                 (void)res; // ignore error
             }
@@ -318,7 +397,7 @@ void FujiNet::writeMem(uint16_t address, uint8_t value, EmuTime /*time*/)
         case IO_CONTROL_ADDR:
             // when writing if bit 7 is high that signals "switch rom to bank"
             // bits 6~1 is reserved and must be 0
-            // when bit 0 is 1 that means switching to user rom 
+            // when bit 0 is 1 that means switching to user rom
             // when bit 0 is 0 that means switching to config rom
             if (value == 0x81) {
                 enableUserROM();
@@ -327,7 +406,8 @@ void FujiNet::writeMem(uint16_t address, uint8_t value, EmuTime /*time*/)
             }
             return;
         default:
-            break;
+            handleBankSwitch(uint16_t address, uint8_t value);
+            return;
     }
 }
 
