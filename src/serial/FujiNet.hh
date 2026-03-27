@@ -11,6 +11,7 @@
 #include "BooleanSetting.hh"
 
 #include "circular_buffer.hh"
+#include "fujiRomType.h"
 
 #include <cstdint>
 #include <mutex>
@@ -50,14 +51,15 @@ private:
 	void readyUserROM();
 	void enableUserROM();
 	void disableUserROM();
-	void setUserROMType(uint8_t t);
-	void setUserROMBank(uint8_t n, uint32_t offset);
+	void setUserROMType(fujiROMType_t t);
+	void setUserROMBank(uint8_t n, uint8_t block);
+	uint8_t readUserROM(uint16_t address);
 	void handleBankSwitch(uint16_t address, uint8_t value);
 
 	Rom rom;
 	std::vector<std::uint8_t> userRom;
 	std::array<std::uint32_t, MAX_BANKS> userRomMap;
-	uint8_t userRomType; // TODO: actual enum/type
+	fujiROMType_t userRomType;
 	bool userRomEnabled;
 	bool userRomLoaded;
 	uint16_t userRomBankSize;
