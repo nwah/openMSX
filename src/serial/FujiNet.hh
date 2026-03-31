@@ -53,8 +53,11 @@ private:
 	void disableUserROM();
 	void setUserROMType(fujiROMType_t t);
 	void setUserROMBank(uint8_t n, uint8_t block);
-	uint8_t readUserROM(uint16_t address);
+	uint8_t peekUserROM(uint16_t address);
 	void handleBankSwitch(uint16_t address, uint8_t value);
+
+	template <typename... Args>
+	void fnDebugLog(Args&&... args);
 
 	Rom rom;
 	std::vector<std::uint8_t> userRom;
