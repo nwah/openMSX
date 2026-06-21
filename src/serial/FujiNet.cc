@@ -17,11 +17,15 @@
 
 namespace openmsx {
 
-static constexpr size_t MAX_BUF_LEN     = 2 * 1024;
+// static constexpr size_t MAX_BUF_LEN     = 2 * 1024;
+static constexpr size_t MAX_BUF_LEN     = 0x40000;
 static constexpr size_t IO_GETC_ADDR    = 0xBFFC;
 static constexpr size_t IO_STATUS_ADDR  = 0xBFFD;
 static constexpr size_t IO_PUTC_ADDR    = 0xBFFE;
 static constexpr size_t IO_CONTROL_ADDR = 0xBFFF;
+static constexpr size_t IO_FLAG_USERROM_READY   = 0x40;
+static constexpr size_t IO_FLAG_ROM_MODE_CMD    = 0b00000100;
+static constexpr size_t IO_FLAG_USERROM_ENABLE  = 0b00000001;
 
 FujiNet::FujiNet(DeviceConfig& config)
     : MSXDevice(config)
@@ -403,14 +407,11 @@ void FujiNet::writeMem(uint16_t address, uint8_t value, EmuTime /*time*/)
             }
             return;
         case IO_CONTROL_ADDR:
-            // when writing if bit 7 is high that signals "switch rom to bank"
-            // bits 6~1 is reserved and must be 0
-            // when bit 0 is 1 that means switching to user rom
-            // when bit 0 is 0 that means switching to config rom
-            if (value == 0x81) {
-                enableUserROM();
-            } else if (value == 0x80){
-                disableUserROM();
+            if (value & IO_FLAG_ROM_MODE_CMD) {
+                if (value & IO_FLAG_USERROM_ENABLE)
+                    enableUserROM();
+                else
+                    disableUserROM();
             }
             return;
         default:
